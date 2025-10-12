@@ -1,0 +1,125 @@
+#!/bin/bash
+# -*- coding: utf-8 -*-
+
+# ENTER PASSWORDS =========================================================================================
+while true; do
+echo -n "Enter new root password [minimum 8 characters]: "; read -rs ROOT_PASS
+
+[[ ! ${#ROOT_PASS} -ge 8 ]] && echo -e "\nPassword for \"root\" does not meet requirements" || break
+done
+echo -e "\nPassword accepted"
+
+while true; do
+echo -n "Enter Pi-Hole new root password [minimum 8 characters]: "; read -rs PIHOLE_PASS
+
+[[ ! ${#PIHOLE_PASS} -ge 8 ]] && echo -e "\nPassword for Pi-Hole user \"root\" does not meet requirements" || break
+done
+echo -e "\nPassword accepted"
+
+# PREPARE DISK ============================================================================================
+DISKS="$(lsblk -ln | grep disk | cut -d' ' -f1)"
+echo -e "Disks:\n${DISKS}\n"
+
+while true; do
+echo -n "Enter disk name for installation [example sda or nvme0n1]: "; read -r DISK_R
+DISK=$(echo "${DISK_R}" | tr '[:upper:]' '[:lower:]')
+[[ ! -n "$(echo "${DISKS}" | grep -ow "${DISK}")" ]] && echo "Disk name not found" || break
+done
+
+while true; do
+echo -n "All data on disk \"${DISK}\" will be destroyed. Continue? [yes/no]: "; read -r DESTROY
+[[ "${DESTROY}" =~ ^([yY][eE][sS])$ ]] && break
+[[ "${DESTROY}" =~ ^([nN][oO])$ ]] && exit 0
+done
+
+echo -e "g\nw\n" | fdisk /dev/"${DISK}"
+echo -e 'mkpart "EFI system partition" fat32 1MiB 501MiB\nset 1 esp on\nmkpart "SYSTEM" ext4 501MiB 100%\nq\n' | parted "/dev/${DISK}"
+
+PARTS=()
+while IFS='' read -r line; do PARTS+=("$line"); done < <(lsblk -ln /dev/"${DISK}" | grep part | cut -d' ' -f1)
+echo "${DISK}"
+echo "${PARTS[@]}" | tr ' ' '\n'
+
+# FORMAT ==================================================================================================
+mkfs.vfat /dev/"${PARTS[0]}"         # EFI   (/dev/nvme0n1p1)
+echo -e "y\n" | mkfs.ext4 /dev/"${PARTS[1]}"         # root  (/dev/nvme0n1p2)
+
+# MOUNT ===================================================================================================
+mount /dev/"${PARTS[1]}" /mnt            # root  (/dev/nvme0n1p2)
+mkdir /mnt/boot
+mount /dev/"${PARTS[0]}" /mnt/boot       # EFI   (/dev/nvme0n1p1)
+
+# ARCH ====================================================================================================
+sed -i '/Color/c\Color' /etc/pacman.conf
+sed -i '/ParallelDownloads/c\ParallelDownloads = 25' /etc/pacman.conf
+
+pacstrap /mnt base linux-firmware linux linux-headers efibootmgr mc nano msedit dhcpcd ntp
+
+genfstab /mnt >> /mnt/etc/fstab
+
+# SETUP ====================================================================================================
+setup() {
+# PACKAGES =================================================================================================
+sed -i '/Color/c\Color' /etc/pacman.conf
+sed -i '/ParallelDownloads/c\ParallelDownloads = 25' /etc/pacman.conf
+
+# ANDONTIE AUR
+pacman-key --recv-key 72BF227DD76AE5BF
+pacman-key --lsign-key 72BF227DD76AE5BF
+
+cat << 'EOF' >> /etc/pacman.conf
+
+[andontie-aur]
+Server = https://aur.andontie.net/$arch
+EOF
+
+pacman -Syu --noconfirm
+
+# NETWORK ==================================================================================================
+systemctl enable dhcpcd
+
+echo "pi-hole" > /etc/hostname
+
+cp /etc/dhcpcd.conf /etc/dhcpcd.conf.bak
+
+NI=$(ip r | awk '/default/ {print $5}')
+
+cat << EOF >> /etc/dhcpcd.conf
+interface ${NI}
+static ip_address=192.168.1.3/24
+static routers=192.168.1.1
+static domain_name_servers=1.0.0.1
+EOF
+
+sed -i '/DNSStubListener/c\DNSStubListener=no' /etc/systemd/resolved.conf
+
+echo -e "${ROOT_PASS}\n${ROOT_PASS}" | passwd
+
+# GRUB ====================================================================================================
+efibootmgr -c -d /dev/"${DISK}" -p 1 -L "ArchLinux" -l \vmlinuz-linux -u "root=/dev/${PARTS[1]} rw initrd=/initramfs-linux.img"
+
+# TIME ====================================================================================================
+systemctl enable ntpd
+
+ln -sf /usr/share/zoneinfo/"$(echo -e '5\n23\n1\n1' | tzselect)" /etc/localtime
+
+# PIHOLE ==================================================================================================
+pacman -S pi-hole-core --noconfirm
+
+echo -e "${PIHOLE_PASS}\n${PIHOLE_PASS}" | pihole setpassword
+
+# END  ====================================================================================================
+echo -e "\nResults ==================================================\n\nDisk partitions:"; lsblk -o +FSUSED;
+echo -e "\nDisk space:"; df -h /; echo -e "\nNetwork interfaces:"; ip -br a; echo -e "\nMemory usage:"; free -h
+
+echo -n "Press enter to continue..."; read -r
+
+exit
+}
+# END SETUP ===============================================================================================
+
+echo -e "$(setup)" | arch-chroot /mnt
+
+umount -R /mnt
+
+reboot
