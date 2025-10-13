@@ -57,8 +57,25 @@ pacstrap /mnt base linux-firmware linux linux-headers efibootmgr mc nano msedit 
 
 genfstab /mnt >> /mnt/etc/fstab
 
-# SETUP ====================================================================================================
+SETUP ====================================================================================================
+# ROOT_PASS=rootpass
+# PIHOLE_PASS=rootpass
+
+# DISK=nvme0n1
+# PARTS=(nvme0n1p1 nvme0n1p2)
+
+
 setup() {
+cat << STP > /mnt/INST_ARCH_PIHOLE
+#!/bin/bash
+# -*- coding: utf-8 -*-
+
+ROOT_PASS=${ROOT_PASS}
+PIHOLE_PASS=${PIHOLE_PASS}
+
+DISK=${DISK}
+PARTS=${PARTS[@]}
+
 # PACKAGES =================================================================================================
 sed -i '/Color/c\Color' /etc/pacman.conf
 sed -i '/ParallelDownloads/c\ParallelDownloads = 25' /etc/pacman.conf
@@ -70,7 +87,7 @@ pacman-key --lsign-key 72BF227DD76AE5BF
 cat << 'EOF' >> /etc/pacman.conf
 
 [andontie-aur]
-Server = https://aur.andontie.net/$arch
+Server = https://aur.andontie.net/\$arch
 EOF
 
 pacman -Syu --noconfirm
@@ -112,13 +129,18 @@ echo -e "${PIHOLE_PASS}\n${PIHOLE_PASS}" | pihole setpassword
 echo -e "\nResults ==================================================\n\nDisk partitions:"; lsblk -o +FSUSED;
 echo -e "\nDisk space:"; df -h /; echo -e "\nNetwork interfaces:"; ip -br a; echo -e "\nMemory usage:"; free -h
 
-echo -n "Press enter to continue..."; read -r
+# echo -n "Press enter to continue..."; read -r
 
 exit
+
+STP
 }
 # END SETUP ===============================================================================================
 
-echo -e "$(setup)" | arch-chroot /mnt
+
+echo -e "./INST_ARCH_PIHOLE" | arch-chroot /mnt
+
+rm /mnt/INST_ARCH_PIHOLE
 
 umount -R /mnt
 
