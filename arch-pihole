@@ -141,8 +141,8 @@ echo -e "$(setup)"
 
 echo -e "./INST_ARCH_PIHOLE" | arch-chroot /mnt
 
-rm /mnt/INST_ARCH_PIHOLE
+#rm /mnt/INST_ARCH_PIHOLE
 
-umount -R /mnt
+#umount -R /mnt
 
-reboot
+#reboot
